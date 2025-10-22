@@ -8,8 +8,9 @@ from pathlib import PurePath
 from string import Formatter as StringFormatter
 from threading import Event, RLock, Thread
 from time import time
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING
 
+from streamlink_cli.console.console import ConsoleOutput
 from streamlink_cli.console.terminal import cut_text, term_width, text_width
 
 
@@ -148,15 +149,15 @@ class ProgressFormatter:
 class Progress(Thread):
     def __init__(
         self,
-        stream: TextIO,
+        console: ConsoleOutput,
         path: PurePath,
         interval: float = 0.25,
         history: int = 20,
         threshold: int = 2,
+        status: bool = True,
     ):
         """
-        :param stream: The output stream
-        :param path: The path that's being written
+        :param console: The console output
         :param interval: Time in seconds between updates
         :param history: Number of seconds of how long download speed history is kept
         :param threshold: Number of seconds until download speed is shown
@@ -168,7 +169,7 @@ class Progress(Thread):
 
         self.formatter = ProgressFormatter()
 
-        self.stream: TextIO = stream
+        self.console: ConsoleOutput = console
         self.path: PurePath = path
         self.interval: float = interval
         self.history: deque[tuple[float, int]] = deque(maxlen=int(history / interval))
@@ -177,6 +178,7 @@ class Progress(Thread):
         self.started: float = 0.0
         self.overall: int = 0
         self.written: int = 0
+        self.status: bool = status
 
     def close(self):
         self._wait.set()
@@ -194,7 +196,6 @@ class Progress(Thread):
                 self.update()
         finally:
             self.update()
-            self.print_end()
 
     def update(self):
         with self._lock:
@@ -221,16 +222,7 @@ class Progress(Thread):
             )
 
             status = formatter.format(formats, params)
-
-            self.print_inplace(status)
-
-    def print_inplace(self, msg: str):
-        """Clears the previous line and prints a new one."""
-        spacing = term_width() - text_width(msg)
-
-        self.stream.write(f"\r{msg}{' ' * max(0, spacing)}")
-        self.stream.flush()
-
-    def print_end(self):
-        self.stream.write("\n")
-        self.stream.flush()
+            if self.status:
+                self.console.msg_status(status)
+            else:
+                self.console.msg(status)

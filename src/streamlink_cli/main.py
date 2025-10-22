@@ -33,7 +33,15 @@ from streamlink_cli.argparser import (
 )
 from streamlink_cli.compat import stdout
 from streamlink_cli.console import ConsoleOutput, ConsoleOutputStream, ConsoleUserInputRequester
-from streamlink_cli.constants import CONFIG_FILES, DEFAULT_STREAM_METADATA, LOG_DIR, PLUGIN_DIRS, STREAM_SYNONYMS
+from streamlink_cli.console.progress import Progress
+from streamlink_cli.constants import (
+    CONFIG_FILES,
+    DEFAULT_STREAM_METADATA,
+    LOG_DIR,
+    PLUGIN_DIRS,
+    PROGRESS_INTERVAL_NO_STATUS,
+    STREAM_SYNONYMS,
+)
 from streamlink_cli.exceptions import StreamlinkCLIError
 from streamlink_cli.output import FileOutput, HTTPOutput, PlayerOutput
 from streamlink_cli.show_matchers import show_matchers
@@ -357,6 +365,29 @@ def open_stream(stream):
     return stream_fd, prebuffer
 
 
+# noinspection PyShadowingNames
+def get_output_progress(output: FileOutput | PlayerOutput) -> Progress | None:
+    if (force := args.progress == "force") or args.progress == "yes" and console.supports_status_messages():
+        options: dict[str, Any] = {}
+        # on non-interactive stdio, write progress status messages as regular messages in a slower interval
+        if force and not console.supports_status_messages():
+            options |= {
+                "interval": PROGRESS_INTERVAL_NO_STATUS,
+                "status": False,
+            }
+
+        if isinstance(output, PlayerOutput):
+            if output.record and output.record.filename:
+                return Progress(console, path=output.record.filename, **options)
+        elif isinstance(output, FileOutput):  # pragma: no branch
+            if output.filename:
+                return Progress(console, path=output.filename, **options)
+            elif output.record and output.record.filename:  # pragma: no branch
+                return Progress(console, path=output.record.filename, **options)
+
+    return None
+
+
 def output_stream(stream, formatter: Formatter):
     """Open stream, create output and finally write the stream to output."""
     global output
@@ -387,15 +418,12 @@ def output_stream(stream, formatter: Formatter):
             raise StreamlinkCLIError(f"Failed to open output ({err})") from err
 
     try:
+        progress = get_output_progress(output)
         with closing(output):
             log.debug("Writing stream to output")
-            show_progress = (
-                args.progress == "force"
-                or args.progress == "yes" and (sys.stderr.isatty() if sys.stderr else False)
-            )  # fmt: skip
             # TODO: finally clean up the global variable mess and refactor the streamlink_cli package
             # noinspection PyUnboundLocalVariable
-            stream_runner = StreamRunner(stream_fd, output, show_progress=show_progress)
+            stream_runner = StreamRunner(stream_fd, output, progress=progress)
             # noinspection PyUnboundLocalVariable
             stream_runner.run(prebuffer)
     except OSError as err:
